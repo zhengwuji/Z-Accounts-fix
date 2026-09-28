@@ -1,0 +1,94 @@
+name: 构建并发布
+
+# 代码变更（新增 / 修改）时自动编译并发布 Release；纯文档（README.md）改动不触发。
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 编译 Z-Accounts (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 编译缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 构建前端 (Vite)
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: 构建后端 (cargo release)
+        working-directory: src-tauri
+        shell: bash
+        run: cargo build --release
+
+      - name: 生成版本号
+        id: ver
+        shell: bash
+        run: echo "tag=v1.8.3-build.$(date -u +'%Y%m%d').${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: 生成中文更新说明
+        shell: bash
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          {
+            echo "## 更新内容"
+            echo ""
+            PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            if [ -n "$PREV" ]; then RANGE="$PREV..HEAD"; else RANGE="HEAD"; fi
+            git log "$RANGE" --no-merges --pretty=format:'- %s' | head -30
+            echo ""
+            echo ""
+            echo "## 下载与使用"
+            echo ""
+            echo "- 下载附件中的 \`Z-Accounts.exe\`（绿色单文件，无需安装，双击即用；Windows 10/11 自带 WebView2）"
+            echo "- 首次使用：主界面点击「保存当前登录」将当前 ZCode 登录入库，或「添加账号」走 OAuth 登录"
+            echo "- 切换账号：在账号列表中双击目标账号（可选重启式 / 热切换）"
+            echo "- 额度查看：仪表盘按各模型剩余额度百分比显示进度条；无额度数据的条目不显示进度条"
+            echo "- 托盘：左键显示主窗口，右键菜单可保存登录 / 启动与关闭 ZCode / 退出"
+            echo "- 完整说明见仓库 README.md"
+            echo ""
+            echo ""
+            echo "## 自行构建"
+            echo ""
+            echo "克隆仓库后运行根目录 \`build.bat\`（需要 Node.js ≥ 18 与 Rust stable-msvc），"
+            echo "产物位于 \`src-tauri/target/release/Z-Accounts.exe\`。"
+          } > release_notes.md
+          cat release_notes.md
+
+      - name: 发布 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --title "Z-Accounts v1.8.3（build $(date -u +'%Y%m%d')，#${GITHUB_RUN_NUMBER}）" \
+            --notes-file release_notes.md \
+            src-tauri/target/release/Z-Accounts.exe

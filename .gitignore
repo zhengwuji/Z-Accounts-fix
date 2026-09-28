@@ -1,0 +1,13 @@
+# 依赖与构建产物（CI 会重新构建）
+node_modules/
+dist/
+src-tauri/target/
+
+# 本地构建出的二进制（正式产物由 Releases 发布）
+Z-Accounts.exe
+*.exe.bak
+
+# 日志与临时文件
+*.log
+*.tmp
+.DS_Store

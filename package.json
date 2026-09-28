@@ -1,0 +1,15 @@
+{
+  "name": "z-accounts",
+  "version": "1.8.3",
+  "private": true,
+  "description": "Z-Accounts frontend (Vite)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5"
+  }
+}
