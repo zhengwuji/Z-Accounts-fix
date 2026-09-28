@@ -516,8 +516,12 @@ pub fn switch_to_core(
     force: bool,
     restart: bool,
 ) -> Result<Value, String> {
+    // `restart` is kept only for invoke compatibility (frontend + watchdog pass
+    // it); a successful switch now always ends with the client open, so the
+    // old restart/launch_after gating no longer applies.
+    let _ = restart;
     let lang = lang_of(&persist);
-    let (mut account, hot_switch, launch_after) = {
+    let (mut account, hot_switch) = {
         let g = persist.store.lock().unwrap();
         let acc = g
             .accounts
@@ -525,7 +529,7 @@ pub fn switch_to_core(
             .find(|a| a.id == id)
             .ok_or_else(|| t(lang, "err.store.no_account", &[]))?
             .clone();
-        (acc, g.settings.hot_switch(), g.settings.launch_after_switch())
+        (acc, g.settings.hot_switch())
     };
     // snapshots are stored with enc:v1-encrypted values; ZCode needs plaintext
     account.credentials = crate::crypto::zcode_cred::decrypt_creds(&account.credentials);
@@ -547,12 +551,19 @@ pub fn switch_to_core(
     if !live_hash.is_empty() && live_hash == account.hash {
         let mut launched = false;
         let mut launch_error = None;
-        if (restart || launch_after) && !running {
+        // the switch "succeeded" either way — make sure the client is open
+        if !running {
             if let Some(exe) = &launch_exe {
                 match zcode::launch(exe) {
                     Ok(()) => launched = true,
                     Err(e) => launch_error = Some(t(lang, "err.zcode.launch", &[("e", &e)])),
                 }
+            } else {
+                launch_error = Some(t(
+                    lang,
+                    "err.zcode.path_invalid_hint",
+                    &[("p", &account.name)],
+                ));
             }
         }
         return Ok(json!({
@@ -647,8 +658,10 @@ pub fn switch_to_core(
     // align provider family domain
     zcode::align_family_domain(&creds);
 
-    // launch ZCode when asked
-    let want_launch = if hot { false } else { restart || launch_after };
+    // launch ZCode when asked — a successful switch always ends with the
+    // client open: hot swap keeps the running instance (already open),
+    // everything else starts it regardless of the launch_after setting
+    let want_launch = !hot;
     let mut launched = false;
     let mut launch_error = None;
     if want_launch {

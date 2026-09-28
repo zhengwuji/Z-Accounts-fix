@@ -391,7 +391,7 @@ const S = {
         title: a("m.switchTitle", {
           name: R(e.name)
         }),
-        desc: `<span class="warn-line">${a("m.switchDesc",{restart:a(p.launch_after_switch?"m.switchRestartYes":"m.switchRestartNo")})}</span>`,
+        desc: `<span class="warn-line">${a("m.switchDesc")}</span>`,
         yesLabel: a("m.switchYes"),
         onYes: () => S.doSwitch(t, !0)
       })
@@ -405,23 +405,17 @@ const S = {
           force: e,
           restart: n
         });
-      if (s.already_active) {
-        const i = [];
-        s.killed && i.push(a("m.bitKilled")), s.launched && i.push(a("m.bitLaunched")), s.launch_error && i.push(a("m.bitLaunchFailed", {
-          err: s.launch_error
-        })), d(a("m.toastAlready", {
+      const i = [];
+      s.killed && i.push(a("m.bitKilled")), s.preserved_as && i.push(a("m.bitPreserved", {
+        name: s.preserved_as
+      })), s.launched && i.push(a("m.bitLaunched")), s.hot && i.unshift(a("m.bitHot")), s.config_stale && i.push(a("m.bitConfigStale"));
+      if (s.launch_error) {
+        i.unshift(String(s.launch_error)), d(a(s.already_active ? "m.toastAlready" : "m.toastSwitchLaunchFail", {
           name: s.name
-        }), s.launch_error ? "warn" : "ok", i.join(a("common.listSep")))
-      } else {
-        const i = [];
-        s.hot && i.push(a("m.bitHot")), s.killed && i.push(a("m.bitKilled")), s.preserved_as && i.push(a("m.bitPreserved", {
-          name: s.preserved_as
-        })), s.launched && i.push(a("m.bitLaunched")), s.launch_error && i.push(a("m.bitLaunchFailed", {
-          err: s.launch_error
-        })), s.config_stale && i.push(a("m.bitConfigStale")), d(a("m.toastSwitched", {
-          name: s.name
-        }), s.config_stale || s.launch_error || s.hot ? "warn" : "ok", i.join(a("common.listSep")))
-      }
+        }), "err", i.join(a("common.listSep")))
+      } else d(a(s.already_active ? "m.toastAlready" : "m.toastSwitched", {
+        name: s.name
+      }), !s.already_active && (s.config_stale || s.hot) ? "warn" : "ok", i.join(a("common.listSep")));
       await T(), $(), ct(t)
     })
   },
