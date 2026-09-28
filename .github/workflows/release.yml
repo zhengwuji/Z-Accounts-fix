@@ -1,6 +1,7 @@
 name: 构建并发布
 
 # 代码变更（新增 / 修改）时自动编译并发布 Release；纯文档（README.md）改动不触发。
+# 注：首次引入本文件的那次 push 不会触发（GitHub 行为），之后的每次代码推送均会触发。
 on:
   push:
     branches: [ main ]
