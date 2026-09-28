@@ -22,6 +22,11 @@ Z-Accounts 1.8.3（ZCode / BigModel / z.ai 账号工作台，Tauri 2 桌面应�
    `zcode.z.ai/api/v1/zcode-plan/billing/balance`（带 ZCode 客户端源标头），与原版行为一致。
 4. **修复 cmd 黑色控制台窗口不断弹出**：所有后台子进程调用（tasklist/taskkill/reg 等）已加
    `CREATE_NO_WINDOW` 标志。
+5. **修复「设置」窗口打开后白屏无响应**（验证码窗口同理）：动态创建 webview 窗口时，wry 在
+   tao 事件循环回调内用消息泵等待 WebView2 完成回调，事件循环被重入导致新窗口的 webview
+   永远停在 about:blank（白屏）、调用方永不返回。修复：设置 / 验证码窗口改为**启动时预创建
+   并隐藏**（与主窗口同一创建路径），打开时仅显示并刷新状态，关闭时隐藏而非销毁；
+   同时统一了各窗口的 WebView2 浏览器参数（参数不一致会导致同数据目录下环境创建失败）。
 
 ## 使用说明
 
@@ -184,6 +189,31 @@ tooltip、菜单、左键显示主窗口等行为全部由 `tray.rs` 管理）�
 `try_lock` 互斥（setup、5 秒轮询线程、菜单回调三方并发时保证"查重→创建"原子；拿不到锁直接跳过，
 避免轮询线程经 `run_on_main_thread` 建托盘、主线程又等锁造成的死锁）。验证：启动后跨两个轮询周期，
 进程内 `tray_icon_app` 隐藏窗口数稳定为 1。
+
+### 设置 / 验证码窗口打开后白屏
+
+「设置」窗口（以及套餐领取的验证码窗口）曾打开后**整窗空白、无响应**，主窗口不受影响。
+
+根因：这两个窗口此前是**运行时动态创建**的——从 IPC 命令里调用 `WebviewWindowBuilder::build()`。
+在 Windows 上，wry 创建 WebView2 时通过 `GetMessage` 消息泵同步等待异步完成回调
+（`webview2_com::wait_with_pump`），而动态建窗发生在 tao 事件循环的回调内部——泵消息会让
+事件循环重入，破坏 wry 的后续初始化流程：新窗口的原生 HWND 与空白 webview（about:blank）
+都创建成功，但**导航到目标页面从未执行**（白屏），且调用方的 promise 永不返回。主窗口在
+事件循环启动之前创建，不走这条路径，所以一直正常。
+
+修复（`src-tauri/src/lib.rs`、`commands.rs`、`captcha_window.rs`）：
+
+1. **启动时预创建**：在 setup（事件循环尚未运行，与主窗口同一创建路径）中把 settings 与
+   captcha 窗口建好并 `visible(false)` 隐藏；打开命令只做 show / focus，并对设置窗口补发
+   `state-changed` 事件强制刷新状态，对验证码窗口执行 `reload` 让验证流程每次从零开始。
+2. **关闭即隐藏**：这两个窗口的 `CloseRequested` 改为 hide + prevent_close，窗口永不销毁，
+   彻底避免再次动态创建。
+3. **统一浏览器参数**：各窗口的 `additional_browser_args` 必须完全一致（原验证码窗口少了
+   `--no-proxy-server`），否则同一 WebView2 用户数据目录下第二次环境创建会直接失败。
+
+验证（CDP 实测）：启动后三个页面 target 全部加载（`/`、`settings.html`、`captcha.html`）；
+`open_settings` 的 promise 立即返回 OK、窗口可见、设置页 DOM 正常渲染（#app 5535 字符、
+splash 隐藏）；关闭后窗口隐藏、再次打开复用同一实例。
 
 ## 许可
 

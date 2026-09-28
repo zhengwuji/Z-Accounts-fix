@@ -820,12 +820,17 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_settings(app: AppHandle) -> Result<(), String> {
-    use tauri::WebviewUrl;
     if let Some(win) = app.get_webview_window("settings") {
         let _ = win.show();
+        let _ = win.unminimize();
         let _ = win.set_focus();
+        // pre-created window: force a state refresh so it never shows stale data
+        emit_global("state-changed", json!({}));
         return Ok(());
     }
+    // fallback: pre-created window is gone (only possible if creation failed
+    // at startup) — build it on demand and show it right away
+    use tauri::WebviewUrl;
     tauri::WebviewWindowBuilder::new(
         &app,
         "settings",

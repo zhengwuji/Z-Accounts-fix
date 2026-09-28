@@ -19,14 +19,20 @@ pub fn open(app: &tauri::AppHandle, account_id: String, plan_id: String) -> Resu
     if let Some(win) = app.get_webview_window("captcha") {
         let _ = win.show();
         let _ = win.set_focus();
+        // pre-created window: reload so the captcha flow starts fresh each time
+        let _ = win.reload();
         return Ok(());
     }
+    // fallback: pre-created window is gone (only possible if creation failed
+    // at startup) — build it on demand and show it right away
     WebviewWindowBuilder::new(app, "captcha", WebviewUrl::App("captcha.html".into()))
         .title("安全验证")
         .inner_size(420.0, 560.0)
         .resizable(false)
         .center()
-        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection")
+        .additional_browser_args(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server",
+        )
         .build()
         .map(|_| ())
         .map_err(|e| e.to_string())

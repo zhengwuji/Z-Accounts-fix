@@ -105,6 +105,47 @@ pub fn run() {
             let handle = app.handle().clone();
             let _ = APP.set(handle.clone());
 
+            // Pre-create the settings & captcha windows NOW (event loop not
+            // running yet, same path as the main window). Creating a webview
+            // window later from an IPC command deadlocks: wry's WebView2
+            // completion callbacks are awaited with a GetMessage pump that
+            // re-enters the tao event loop, so the new webview never navigates
+            // (white window) and the caller never returns. These windows are
+            // hidden on close instead of destroyed (see on_window_event).
+            let _ = tauri::WebviewWindowBuilder::new(
+                &handle,
+                "settings",
+                tauri::WebviewUrl::App("settings.html".into()),
+            )
+            .title("Z-Accounts 设置")
+            .inner_size(720.0, 780.0)
+            .min_inner_size(620.0, 560.0)
+            .visible(false)
+            .resizable(true)
+            .center()
+            .additional_browser_args(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server",
+            )
+            .build();
+            let _ = tauri::WebviewWindowBuilder::new(
+                &handle,
+                "captcha",
+                tauri::WebviewUrl::App("captcha.html".into()),
+            )
+            .title("安全验证")
+            .inner_size(420.0, 560.0)
+            .visible(false)
+            .resizable(false)
+            .center()
+            // must match the other windows' browser args exactly — WebView2
+            // rejects an environment whose args differ within the same
+            // user data folder
+            .additional_browser_args(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server",
+            )
+            .build()
+            .inspect_err(|e| eprintln!("pre-create captcha window failed: {e}"));
+
             // tray
             let p = persist.clone();
             tray::rebuild(&handle, &p).ok();
@@ -137,13 +178,24 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
-                let close_to_tray = app
-                    .try_state::<Arc<store::Persist>>()
-                    .map(|p| p.store.lock().unwrap().settings.close_to_tray())
-                    .unwrap_or(true);
-                if close_to_tray && window.label() == "main" {
-                    let _ = window.hide();
-                    api.prevent_close();
+                match window.label() {
+                    // pre-created windows are only hidden, never destroyed
+                    // (recreating them dynamically would deadlock, see setup)
+                    "settings" | "captcha" => {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
+                    "main" => {
+                        let close_to_tray = app
+                            .try_state::<Arc<store::Persist>>()
+                            .map(|p| p.store.lock().unwrap().settings.close_to_tray())
+                            .unwrap_or(true);
+                        if close_to_tray {
+                            let _ = window.hide();
+                            api.prevent_close();
+                        }
+                    }
+                    _ => {}
                 }
             }
         })
