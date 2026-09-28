@@ -23,6 +23,12 @@ ring = "0.17"
 ureq = { version = "2.12", features = ["json", "gzip"], default-features = true }
 regex = "1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

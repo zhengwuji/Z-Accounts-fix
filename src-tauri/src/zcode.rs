@@ -73,11 +73,89 @@ pub fn find_zcode_exe(configured: &str) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let default = default_exe_path();
-    if default.is_file() {
-        return Some(default);
+    // %LOCALAPPDATA% may point elsewhere than the profile that actually has
+    // the install (relocated profiles on another drive), so try both.
+    let local = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home_dir().join("AppData").join("Local"));
+    for base in [local, home_dir().join("AppData").join("Local")] {
+        let p = base.join("Programs").join("ZCode").join(ZCODE_EXE);
+        if p.is_file() {
+            return Some(p);
+        }
     }
     registry_uninstall_lookup()
+        .or_else(running_process_path)
+}
+
+/// The running ZCode.exe knows where it lives — ask the OS for its image
+/// path (native API, no console subprocess). Used as the last resort when
+/// no install location can be derived from settings/default dirs/registry.
+#[cfg(windows)]
+pub fn running_process_path() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..std::mem::zeroed()
+        };
+        if Process32FirstW(snap, &mut entry) == 0 {
+            CloseHandle(snap);
+            return None;
+        }
+        let mut pid = 0u32;
+        loop {
+            let name = String::from_utf16_lossy(
+                &entry.szExeFile[..entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(0)],
+            );
+            if name.eq_ignore_ascii_case(ZCODE_EXE) {
+                pid = entry.th32ProcessID;
+                break;
+            }
+            if Process32NextW(snap, &mut entry) == 0 {
+                break;
+            }
+        }
+        CloseHandle(snap);
+        if pid == 0 {
+            return None;
+        }
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        if ok != 0 && len > 0 {
+            let path = std::ffi::OsString::from_wide(&buf[..len as usize]);
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        None
+    }
+}
+
+#[cfg(not(windows))]
+pub fn running_process_path() -> Option<PathBuf> {
+    None
 }
 
 fn registry_uninstall_lookup() -> Option<PathBuf> {
@@ -85,25 +163,51 @@ fn registry_uninstall_lookup() -> Option<PathBuf> {
         r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
         r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
     ];
-    const HIVES: &[(&str, &str)] = &[("HKCU", ""), ("HKLM", "")];
-    for (hive, _) in HIVES {
+    const HIVES: &[&str] = &["HKCU", "HKLM"];
+    for hive in HIVES {
         for key in KEYS {
             let full = format!(r"{hive}\{key}");
             let mut reg_cmd = Command::new("reg");
-            if let Ok(out) = silent(&mut reg_cmd)
-                .args(["query", &full, "/s", "/f", "ZCode.exe", "/d"])
-                .output()
-            {
+            // dump every value: ZCode's uninstall entry often has an EMPTY
+            // InstallLocation and a DisplayIcon pointing at an .ico, so a
+            // targeted `/f ZCode.exe` data search finds nothing. We derive the
+            // install dir from InstallLocation / DisplayIcon instead.
+            if let Ok(out) = silent(&mut reg_cmd).args(["query", &full, "/s"]).output() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 for line in text.lines() {
                     let line = line.trim();
-                    if line.ends_with(ZCODE_EXE) && line.contains("REG_SZ") {
-                        if let Some(path) = line.split_whitespace().last() {
-                            let p = PathBuf::from(path);
-                            if p.is_file() {
-                                return Some(p);
-                            }
+                    let Some((name, data)) = line.split_once("REG_SZ") else {
+                        continue;
+                    };
+                    let name = name.trim();
+                    if name != "InstallLocation" && name != "DisplayIcon" {
+                        continue;
+                    }
+                    // strip an icon index suffix ("...,0") then quotes
+                    let mut data = data.trim();
+                    if let Some(idx) = data.rfind(',') {
+                        if data[idx + 1..].trim().chars().all(|c| c.is_ascii_digit()) && !data[idx + 1..].trim().is_empty() {
+                            data = data[..idx].trim();
                         }
+                    }
+                    let data = data.trim_matches('"');
+                    if !data.to_lowercase().contains("zcode") {
+                        continue;
+                    }
+                    let dir = PathBuf::from(data);
+                    let dir = if dir.is_file() {
+                        match dir.parent() {
+                            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+                            _ => continue,
+                        }
+                    } else if dir.is_dir() {
+                        dir
+                    } else {
+                        continue;
+                    };
+                    let exe = dir.join(ZCODE_EXE);
+                    if exe.is_file() {
+                        return Some(exe);
                     }
                 }
             }
